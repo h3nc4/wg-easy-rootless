@@ -55,6 +55,12 @@ The image's `/etc/wireguard` belongs to `65534:65534`, and Docker copies that ow
 
 `/tmp` must be writable, since `XTABLES_LOCKFILE` moves the iptables lock there from the read-only `/run`.
 
+## Tags
+
+Each image is named after the upstream release it rebuilds, so `h3nc4/wg-easy-rootless:15.5.0` is wg-easy 15.5.0. The newest release is also tagged `15.5`, `15` and `latest`. Releases from 15.2.0 on are published. The patch fails on older ones, which lack `awg-quick` or change the lines it edits.
+
+Renovate opens a pull request for each new upstream release, and its merge publishes the matching image. A past release is published by running the "Publish Docker Image" workflow by hand with that version, which pushes its exact tag and leaves `latest` alone.
+
 ## Moving an existing installation
 
 A volume created by the upstream image belongs to root. Stop the container and hand the volume to the image's user before the first start:
@@ -97,6 +103,12 @@ docker build -t h3nc4/wg-easy-rootless .
 ```
 
 The build fails when an upstream release changes the lines around `auto_su` in `wg-quick` or `awg-quick`, since the patch applies with `--fuzz=0`. A moved line stops the build rather than reaching a VPN that never comes up.
+
+`scripts/smoke-test.sh` starts a built image as `65534` with `NET_ADMIN` and `NET_RAW` on a read-only root and fails unless wg-easy reports healthy with `wg0` up. The workflow runs it before any push:
+
+```shell
+./scripts/smoke-test.sh h3nc4/wg-easy-rootless
+```
 
 ## License
 

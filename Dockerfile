@@ -24,7 +24,7 @@ COPY ambient-caps.c ./
 RUN cc -O2 -Wall -Wextra -Werror -static -s -o /ambient-caps ambient-caps.c
 
 ################################################################################
-FROM codeberg.org/wg-easy/wg-easy:15@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8 AS final
+FROM ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8 AS final
 
 COPY --from=ambient-caps /ambient-caps /usr/local/bin/ambient-caps
 

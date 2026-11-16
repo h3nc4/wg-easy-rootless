@@ -8,6 +8,7 @@ on:
       - "Dockerfile"
       - "ambient-caps.c"
       - "wg-quick-non-root.patch"
+      - "scripts/smoke-test.sh"
       - ".github/workflows/publish-image.yaml"
   pull_request:
     branches:
@@ -16,7 +17,14 @@ on:
       - "Dockerfile"
       - "ambient-caps.c"
       - "wg-quick-non-root.patch"
+      - "scripts/smoke-test.sh"
       - ".github/workflows/publish-image.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream wg-easy release to build, 15.2.0 or later
+        required: true
+        type: string
 
 jobs:
   build-push:
@@ -30,18 +38,71 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Run docker/login-action
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Get short SHA
-        id: sha
-        run: echo "short=${GITHUB_SHA::7}" >>"${GITHUB_OUTPUT}"
+      - name: Base the build on the requested release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "${VERSION}" | grep -Eq '^15\.([2-9]|[1-9][0-9])\.[0-9]+$' || {
+            echo "::error::${VERSION} is not a wg-easy release from 15.2.0 on"
+            exit 1
+          }
+          digest="$(docker buildx imagetools inspect "ghcr.io/wg-easy/wg-easy:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          sed -i "s|^FROM ghcr.io/wg-easy/wg-easy:[^ ]* AS final\$|FROM ghcr.io/wg-easy/wg-easy:${VERSION}@${digest} AS final|" Dockerfile
+          grep -n "^FROM ghcr.io/wg-easy/wg-easy:${VERSION}@${digest} AS final\$" Dockerfile
+
+      - name: Read the upstream release
+        id: upstream
+        run: |
+          version="$(sed -n 's|^FROM ghcr.io/wg-easy/wg-easy:\([0-9][0-9.]*\)@sha256:[0-9a-f]* AS final$|\1|p' Dockerfile)"
+          [ -n "${version}" ] || { echo "::error::no upstream release in the Dockerfile's final FROM"; exit 1; }
+          {
+            echo "version=${version}"
+            echo "minor=${version%.*}"
+            echo "major=${version%%.*}"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Name the published image
         run: echo "IMAGE=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')" >>"${GITHUB_ENV}"
+
+      - name: Run docker/build-push-action for the smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: wg-easy-rootless:smoke
+
+      - name: Run the smoke test
+        run: ./scripts/smoke-test.sh wg-easy-rootless:smoke
+
+      - name: List the tags to publish
+        id: tags
+        env:
+          EVENT: ${{ github.event_name }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+          MINOR: ${{ steps.upstream.outputs.minor }}
+          MAJOR: ${{ steps.upstream.outputs.major }}
+        run: |
+          {
+            echo "list<<EOF"
+            echo "${IMAGE}:${VERSION}"
+            if [ "${EVENT}" != "workflow_dispatch" ]; then
+              echo "${IMAGE}:${MINOR}"
+              echo "${IMAGE}:${MAJOR}"
+              echo "${IMAGE}:latest"
+              echo "${IMAGE}:${GITHUB_SHA::7}"
+            fi
+            echo "EOF"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Run docker/build-push-action
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -50,7 +111,5 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ steps.sha.outputs.short }}
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+          tags: ${{ steps.tags.outputs.list }}
