@@ -21,9 +21,12 @@ set -eu
 
 IMAGE="$1"
 NAME="wg-easy-rootless-smoke-$$"
+VOLUME="${NAME}-data"
+ALPINE="alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
 
 cleanup() {
-  docker rm -f -v "${NAME}" >/dev/null 2>&1 || :
+  docker rm -f "${NAME}" >/dev/null 2>&1 || :
+  docker volume rm "${VOLUME}" >/dev/null 2>&1 || :
 }
 trap cleanup EXIT
 
@@ -33,14 +36,33 @@ fail() {
   exit 1
 }
 
-docker run -d --name "${NAME}" \
-  --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
-  --security-opt no-new-privileges:true --read-only --tmpfs /tmp \
-  --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --mount type=volume,dst=/etc/wireguard \
-  -e INSECURE=true \
-  --health-interval 5s --health-start-period 5s \
-  "${IMAGE}" >/dev/null
+start() {
+  docker rm -f "${NAME}" >/dev/null 2>&1 || :
+  docker run -d --name "${NAME}" \
+    --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+    --security-opt no-new-privileges:true --read-only --tmpfs /tmp \
+    --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+    --mount "type=volume,src=${VOLUME},dst=/etc/wireguard" \
+    -e INSECURE=true \
+    --health-interval 5s --health-start-period 5s \
+    "${IMAGE}" >/dev/null
+}
+
+# The default hooks need legacy iptables, which the kernel of a hosted runner lacks, and a failed
+# PostUp takes wg0 down. The first start creates the database, and the second runs with empty hooks.
+docker volume create "${VOLUME}" >/dev/null
+start
+i=0
+until docker run --rm -v "${VOLUME}:/d:ro" "${ALPINE}" test -s /d/wg0.conf; do
+  i=$((i + 1))
+  [ "${i}" -lt 60 ] || fail "no wg0.conf after 120 seconds"
+  sleep 2
+done
+docker rm -f "${NAME}" >/dev/null
+docker run --rm -v "${VOLUME}:/d" \
+  -e SQL="update hooks_table set post_up = '', post_down = '' where id = 'wg0';" \
+  "${ALPINE}" sh -c 'apk add -q sqlite >/dev/null && sqlite3 /d/wg-easy.db "${SQL}"'
+start
 
 i=0
 while :; do
