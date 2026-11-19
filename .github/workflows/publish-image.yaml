@@ -99,7 +99,6 @@ jobs:
               echo "${IMAGE}:${MINOR}"
               echo "${IMAGE}:${MAJOR}"
               echo "${IMAGE}:latest"
-              echo "${IMAGE}:${GITHUB_SHA::7}"
             fi
             echo "EOF"
           } >>"${GITHUB_OUTPUT}"
@@ -113,3 +112,4 @@ jobs:
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: ${{ steps.tags.outputs.list }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
