@@ -19,7 +19,7 @@ on:
       - "ambient-caps.c"
       - "wg-quick-non-root.patch"
       - "scripts/smoke-test.sh"
-      - ".github/workflows/publish-image.yaml"
+      - ".github/workflows/**"
   workflow_dispatch:
     inputs:
       version:
